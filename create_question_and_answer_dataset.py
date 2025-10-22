@@ -51,14 +51,34 @@ def load_chunks_from_vectorstore(connection_string, table_name):
 def create_knowledge_graph_from_chunks(rows):
     """
     Create a Ragas KnowledgeGraph from database chunks.
-    Each chunk becomes a CHUNK node in the knowledge graph.
+    Creates both DOCUMENT nodes (for persona generation) and CHUNK nodes.
     """
     print("🧠 Creating Knowledge Graph from chunks...")
     
     kg = KnowledgeGraph()
     documents = []  # Store documents for transforms
     
-    # Add each chunk as a node to the knowledge graph
+    # First, create a parent DOCUMENT node
+    # Ragas needs DOCUMENT nodes for persona generation
+    all_texts = []
+    
+    for id_, node_id, text, metadata, embedding in rows:
+        # Skip very short texts
+        if len(text.strip()) < 50:
+            continue
+        all_texts.append(text)
+    
+    # Create a parent document node (Ragas needs this for personas)
+    parent_doc_node = Node(
+        type=NodeType.DOCUMENT,
+        properties={
+            "page_content": "\n\n".join(all_texts[:5]),  # Combine first few chunks
+            "document_metadata": {"source": "vector_store", "type": "combined"}
+        }
+    )
+    kg.nodes.append(parent_doc_node)
+    
+    # Now add each chunk as a node to the knowledge graph
     for id_, node_id, text, metadata, embedding in rows:
         # Skip very short texts
         if len(text.strip()) < 50:
@@ -76,7 +96,7 @@ def create_knowledge_graph_from_chunks(rows):
         )
         documents.append(doc)
         
-        # Create a node for each chunk
+        # Create a CHUNK node (these will be used for question generation)
         node = Node(
             type=NodeType.CHUNK,
             properties={
@@ -89,6 +109,8 @@ def create_knowledge_graph_from_chunks(rows):
         kg.nodes.append(node)
     
     print(f"✅ Created Knowledge Graph with {len(kg.nodes)} nodes")
+    print(f"   - 1 DOCUMENT node (for persona generation)")
+    print(f"   - {len(kg.nodes)-1} CHUNK nodes (for question generation)")
     return kg, documents
 
 
@@ -144,29 +166,84 @@ def generate_testset_with_ragas(kg, llm, embeddings, testset_size=10):
     """
     print(f"\n📝 Generating testset with {testset_size} samples using Ragas...")
     
-    # Create TestsetGenerator with enriched knowledge graph
-    generator = TestsetGenerator(
-        llm=llm,
-        embedding_model=embeddings,
-        knowledge_graph=kg
-    )
-    
-    # Get default query distribution
-    # This gives us: SingleHop(50%), MultiHopAbstract(25%), MultiHopSpecific(25%)
-    query_distribution = default_query_distribution(llm)
-    
-    print("\n📊 Query Distribution:")
-    for synthesizer, probability in query_distribution:
-        print(f"   - {synthesizer.__class__.__name__}: {probability*100}%")
-    
-    # Generate the testset
-    testset = generator.generate(
-        testset_size=testset_size,
-        query_distribution=query_distribution
-    )
-    
-    print(f"\n✅ Generated {len(testset)} testset samples!")
-    return testset
+    try:
+        # Try with TestsetGenerator first
+        generator = TestsetGenerator(
+            llm=llm,
+            embedding_model=embeddings,
+            knowledge_graph=kg
+        )
+        
+        # Get default query distribution
+        query_distribution = default_query_distribution(llm)
+        
+        print("\n📊 Query Distribution:")
+        for synthesizer, probability in query_distribution:
+            print(f"   - {synthesizer.__class__.__name__}: {probability*100}%")
+        
+        # Generate the testset (without run_config to avoid the error)
+        testset = generator.generate(
+            testset_size=testset_size,
+            query_distribution=query_distribution,
+            with_debugging_logs=False
+        )
+        
+        print(f"\n✅ Generated {len(testset)} testset samples!")
+        return testset
+        
+    except (ValueError, Exception) as e:
+        error_msg = str(e)
+        if "No nodes that satisfied" in error_msg or "No relationships match" in error_msg or "Cannot form clusters" in error_msg:
+            print(f"\n⚠️  Knowledge Graph approach failed: {error_msg}")
+            print("Switching to simpler document-based generation method...")
+            
+            # Alternative: Use generate_with_langchain_docs
+            # This bypasses the Knowledge Graph approach
+            from langchain_core.documents import Document
+            
+            # Get documents from KG nodes
+            docs = []
+            for node in kg.nodes:
+                if node.type == NodeType.CHUNK and "page_content" in node.properties:
+                    doc = Document(
+                        page_content=node.properties["page_content"],
+                        metadata=node.properties.get("metadata", {})
+                    )
+                    docs.append(doc)
+            
+            if not docs:
+                # If no CHUNK nodes, try DOCUMENT nodes
+                for node in kg.nodes:
+                    if "page_content" in node.properties:
+                        doc = Document(
+                            page_content=node.properties["page_content"],
+                            metadata=node.properties.get("metadata", {})
+                        )
+                        docs.append(doc)
+            
+            print(f"📄 Using {len(docs)} documents for testset generation...")
+            
+            if not docs:
+                raise ValueError("No documents found in Knowledge Graph to generate testset")
+            
+            # Create a fresh generator without KG
+            generator = TestsetGenerator(
+                llm=llm,
+                embedding_model=embeddings
+            )
+            
+            # Use the simpler generate_with_langchain_docs method
+            print("🔄 Generating testset with document-based approach...")
+            testset = generator.generate_with_langchain_docs(
+                documents=docs,
+                testset_size=testset_size
+            )
+            
+            print(f"\n✅ Generated {len(testset)} testset samples using document-based method!")
+            return testset
+        else:
+            # Re-raise if it's a different error
+            raise
 
 
 def save_testset_to_csv(testset, filename="ragas_testset.csv"):
