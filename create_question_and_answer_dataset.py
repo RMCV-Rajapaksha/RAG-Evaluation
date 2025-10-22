@@ -114,7 +114,7 @@ def create_knowledge_graph_from_chunks(rows):
     return kg, documents
 
 
-def setup_llm_and_embeddings(model_name="gpt-4o-mini"):
+def setup_llm_and_embeddings(model_name="gpt-4o"):
     """
     Setup LLM and embedding models for Ragas.
     """
@@ -320,7 +320,7 @@ def main():
         hf_repo_id = os.getenv("HF_REPO_ID", "ChamaraVishwajithRajapaksha/RAG-Evaluation-Dataset")
         openai_api_key = os.getenv("OPENAI_API_KEY")
         testset_size = int(os.getenv("TESTSET_SIZE", "10"))
-        model_name = os.getenv("MODEL_NAME", "gpt-4o-mini")
+        model_name = os.getenv("MODEL_NAME", "gpt-4o")
 
         # Validate required environment variables
         if not connection_string or not table_name:
@@ -358,14 +358,20 @@ def main():
         # Step 3: Setup LLM and Embeddings
         llm, embeddings = setup_llm_and_embeddings(model_name)
 
-        # Step 4: Enrich Knowledge Graph with transformations
-        # This extracts entities, keyphrases, and builds relationships
-        kg = enrich_knowledge_graph(kg, documents, llm, embeddings)
-
-        # Optional: Save knowledge graph
+        # Step 4: Check if knowledge graph exists
         kg_filename = "knowledge_graph.json"
-        kg.save(kg_filename)
-        print(f"\n💾 Saved Knowledge Graph to {kg_filename}")
+        if os.path.exists(kg_filename):
+            print(f"\n📂 Loading existing Knowledge Graph from {kg_filename}")
+            kg = KnowledgeGraph.load(kg_filename)
+            print(f"✅ Loaded Knowledge Graph with {len(kg.nodes)} nodes")
+        else:
+            print("\n🔄 Creating new Knowledge Graph...")
+            # Enrich Knowledge Graph with transformations
+            # This extracts entities, keyphrases, and builds relationships
+            kg = enrich_knowledge_graph(kg, documents, llm, embeddings)
+            # Save knowledge graph
+            kg.save(kg_filename)
+            print(f"\n💾 Saved Knowledge Graph to {kg_filename}")
 
         # Step 5: Generate testset using Ragas
         testset = generate_testset_with_ragas(kg, llm, embeddings, testset_size)
