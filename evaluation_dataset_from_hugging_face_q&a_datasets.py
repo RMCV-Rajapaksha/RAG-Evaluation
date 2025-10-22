@@ -14,6 +14,8 @@ import random
 import pandas as pd
 from datasets import Dataset
 from huggingface_hub import HfApi
+from ragas.testset import QuerySynthesizer
+
 
 try:
     from dotenv import load_dotenv
