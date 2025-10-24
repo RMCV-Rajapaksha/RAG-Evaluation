@@ -206,6 +206,7 @@ def convert_transcripts_to_documents(transcript_results: list, chunk_transcripts
                         "source": "youtube_transcript",
                         "url": url,
                         "title": metadata['title'],
+                        "video_title": metadata['title'],  # Added for easy access
                         "description": metadata['description'],
                         "chunk_index": i,
                         "total_chunks": len(chunks)
@@ -219,6 +220,7 @@ def convert_transcripts_to_documents(transcript_results: list, chunk_transcripts
                     "source": "youtube_transcript",
                     "url": url,
                     "title": metadata['title'],
+                    "video_title": metadata['title'],  # Added for easy access
                     "description": metadata['description']
                 }
             )
@@ -340,13 +342,75 @@ def generate_testset_with_ragas(kg, documents, llm, embeddings, testset_size=10,
             raise
 
 
+def extract_video_title_from_contexts(contexts):
+    """
+    Extract video title from contexts metadata.
+    
+    Args:
+        contexts: List of context objects or strings
+        
+    Returns:
+        Video title or None
+    """
+    if not contexts:
+        return None
+    
+    # Handle different context formats
+    for context in contexts:
+        try:
+            # If context is a Document object
+            if hasattr(context, 'metadata'):
+                if 'video_title' in context.metadata:
+                    return context.metadata['video_title']
+                elif 'title' in context.metadata:
+                    return context.metadata['title']
+            
+            # If context is a dict
+            elif isinstance(context, dict):
+                if 'metadata' in context:
+                    if 'video_title' in context['metadata']:
+                        return context['metadata']['video_title']
+                    elif 'title' in context['metadata']:
+                        return context['metadata']['title']
+        except Exception:
+            continue
+    
+    return None
+
+
 def save_testset_to_csv(testset, filename="youtube_qa_testset.csv"):
     """
     Convert Ragas testset to pandas DataFrame and save to CSV.
+    Adds video_title column by extracting from contexts.
     """
     print(f"\n💾 Saving testset to {filename}...")
     
     df = testset.to_pandas()
+    
+    # Add video_title column
+    if 'contexts' in df.columns:
+        print("📋 Extracting video titles from contexts...")
+        df['video_title'] = df['contexts'].apply(extract_video_title_from_contexts)
+        
+        # Count how many titles were extracted
+        titles_found = df['video_title'].notna().sum()
+        print(f"   ✓ Extracted video titles for {titles_found}/{len(df)} samples")
+    else:
+        print("⚠️  No 'contexts' column found, adding empty video_title column")
+        df['video_title'] = None
+    
+    # Reorder columns to put video_title near the beginning
+    cols = df.columns.tolist()
+    if 'video_title' in cols:
+        # Move video_title to be after question
+        cols.remove('video_title')
+        if 'question' in cols:
+            question_idx = cols.index('question')
+            cols.insert(question_idx + 1, 'video_title')
+        else:
+            cols.insert(0, 'video_title')
+        df = df[cols]
+    
     df.to_csv(filename, index=False, encoding='utf-8')
     
     print(f"✅ Saved testset with {len(df)} samples")
@@ -369,6 +433,8 @@ def display_sample_questions(df):
         print("\n--- Sample Questions ---")
         for i, row in df.head(5).iterrows():
             print(f"\n{i+1}. Question: {row['question']}")
+            if 'video_title' in df.columns and pd.notna(row['video_title']):
+                print(f"   Video: {row['video_title']}")
             if 'ground_truth' in df.columns and pd.notna(row['ground_truth']):
                 gt_preview = str(row['ground_truth'])[:200]
                 print(f"   Ground Truth: {gt_preview}{'...' if len(str(row['ground_truth'])) > 200 else ''}")
@@ -419,13 +485,12 @@ def main():
 
         # Step 1: Define YouTube URLs
         youtube_urls = [
-            # "https://www.youtube.com/watch?v=X5eC3Rk9FBQ"
+            "https://www.youtube.com/watch?v=X5eC3Rk9FBQ"
             #   "https://www.youtube.com/watch?v=-nwIoiPB8CE",
-                "https://www.youtube.com/watch?v=GoYR-iK2UUk",
-                # "https://www.youtube.com/watch?v=CYii_zExySA",
-                # "https://www.youtube.com/watch?v=banNxyyTSI4",
-                # "https://www.youtube.com/watch?v=wobNffok7nc",
-                # "https://www.youtube.com/watch?v=bTj0h5x8W70"
+            #     "https://www.youtube.com/watch?v=GoYR-iK2UUk",
+            #     "https://www.youtube.com/watch?v=CYii_zExySA",
+            #     "https://www.youtube.com/watch?v=banNxyyTSI4",
+            #     "https://www.youtube.com/watch?v=wobNffok7nc"
             # Add more URLs here
         ]
         
@@ -472,7 +537,7 @@ def main():
         # Step 7: Generate Q&A testset
         testset = generate_testset_with_ragas(kg, documents, llm, embeddings, testset_size, use_kg)
 
-        # Step 8: Save to CSV
+        # Step 8: Save to CSV (now includes video_title extraction)
         csv_filename = "youtube_qa_testset.csv"
         df = save_testset_to_csv(testset, csv_filename)
 
