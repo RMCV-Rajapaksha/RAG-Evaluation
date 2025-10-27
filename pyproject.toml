@@ -5,11 +5,14 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "deepeval>=3.6.7",
     "dotenv>=0.9.9",
+    "fitz>=0.0.1.dev2",
     "jupyter>=1.1.1",
     "llama-index-core>=0.14.5",
     "llama-index-vector-stores-postgres>=0.7.0",
     "psycopg2-binary>=2.9.11",
+    "pymupdf>=1.26.5",
     "python-dotenv>=1.1.1",
     "ragas>=0.3.7",
     "rapidfuzz>=3.14.1",
